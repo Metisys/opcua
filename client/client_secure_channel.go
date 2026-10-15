@@ -254,17 +254,32 @@ func (ch *clientSecureChannel) Request(ctx context.Context, req ua.ServiceReques
 	select {
 	case res := <-operation.ResponseCh():
 		cancel()
-		if sr := res.Header().ServiceResult; sr != ua.Good {
-			return nil, sr
-		}
-		return res, nil
+		return requestResult(res)
 	case <-ctx.Done():
 		cancel()
 		return nil, ua.BadRequestTimeout
 	case <-ch.closed:
 		cancel()
+		// A response that arrived before the channel closed still answers the
+		// request. Both cases can be ready at once, and select picks among
+		// ready cases at random: sendRequest queues CloseSecureChannel's
+		// response itself, and the server answers that request by closing its
+		// socket, so a Close whose goroutine ran late failed about half the time.
+		select {
+		case res := <-operation.ResponseCh():
+			return requestResult(res)
+		default:
+		}
 		return nil, ua.BadSecureChannelClosed
 	}
+}
+
+// requestResult is the result of a request that received res.
+func requestResult(res ua.ServiceResponse) (ua.ServiceResponse, error) {
+	if sr := res.Header().ServiceResult; sr != ua.Good {
+		return nil, sr
+	}
+	return res, nil
 }
 
 // Open opens the channel.
